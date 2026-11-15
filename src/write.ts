@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as XLSX from 'xlsx';
 import type { Row, World } from './datasets';
-import { UPLOAD_ORDER, sheetInfo } from './datasets';
 import type { Anchor } from './inputs';
+import { builtInSpec, type SheetPlan, type SheetSpec } from './schema';
 
 // SheetJS writes the same bytes for the same workbook: it has no clock-based zip entry times and
 // takes the core.xml dates from Props. Pin the dates so nothing depends on when the run happens.
@@ -18,8 +18,8 @@ export function fileName(index: number, slug: string): string {
 const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
 /** Throws, naming dataset, row and column, when a text cell holds a control character. */
-export function assertCellsClean(slug: string, rows: readonly Row[]): void {
-  const { headers } = sheetInfo(slug);
+export function assertCellsClean(slug: string, rows: readonly Row[], spec: SheetSpec = builtInSpec(slug)): void {
+  const headers = spec.dataset.columns.map((c) => c.header);
   rows.forEach((r, i) => {
     for (const h of headers) {
       const v = r[h];
@@ -31,9 +31,10 @@ export function assertCellsClean(slug: string, rows: readonly Row[]): void {
 }
 
 /** The bytes of one sheet named as the app expects, headers in row 1. Text stays text; null stays empty. */
-export function datasetBytes(slug: string, rows: readonly Row[]): Buffer {
-  assertCellsClean(slug, rows);
-  const { sheetName, headers } = sheetInfo(slug);
+export function datasetBytes(slug: string, rows: readonly Row[], spec: SheetSpec = builtInSpec(slug)): Buffer {
+  assertCellsClean(slug, rows, spec);
+  const { sheetName } = spec;
+  const headers = spec.dataset.columns.map((c) => c.header);
   const aoa: Array<Array<string | number | null>> = [
     [...headers],
     ...rows.map((r) => headers.map((h) => r[h] ?? null)),
@@ -53,11 +54,6 @@ export function datasetBytes(slug: string, rows: readonly Row[]): Buffer {
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', compression: true }) as Buffer;
 }
 
-export function writeDataset(out: string, index: number, slug: string, rows: readonly Row[]): string {
-  const file = path.join(out, fileName(index, slug));
-  fs.writeFileSync(file, datasetBytes(slug, rows));
-  return file;
-}
 
 /** One line per anchor: the TCAS row it was matched to and the mock programme it became. */
 export function anchorLines(world: World, anchors: readonly Anchor[]): string[] {
@@ -72,9 +68,17 @@ export function anchorLines(world: World, anchors: readonly Anchor[]): string[] 
   });
 }
 
-export function readmeText(world: World, anchors: readonly Anchor[], notes: readonly string[], university: string): string {
-  const first = sheetInfo(UPLOAD_ORDER[0] as string);
-  const last = sheetInfo(UPLOAD_ORDER[UPLOAD_ORDER.length - 1] as string);
+export function readmeText(
+  world: World,
+  anchors: readonly Anchor[],
+  notes: readonly string[],
+  university: string,
+  plan: SheetPlan,
+): string {
+  const { order, specs } = plan;
+  const titleOf = (slug: string): string => (specs.get(slug) ?? builtInSpec(slug)).title;
+  const first = { title: titleOf(order[0] as string) };
+  const last = { title: titleOf(order[order.length - 1] as string) };
   const L: string[] = [
     'WORKSHOP MOCK DATA - what to do next', '='.repeat(40), '',
     'These files are MOCK data. They are not your university\'s real figures.',
@@ -92,8 +96,8 @@ export function readmeText(world: World, anchors: readonly Anchor[], notes: read
     'Open the page named below and use the "Upload filled template" control.',
     'Upload in this order. Later files refer to codes in earlier ones.', '',
   ];
-  UPLOAD_ORDER.forEach((slug, k) => {
-    L.push(`  ${String(k + 1).padStart(2, ' ')}. ${fileName(k + 1, slug).padEnd(46)} dataset page: ${sheetInfo(slug).title}`);
+  order.forEach((slug, k) => {
+    L.push(`  ${String(k + 1).padStart(2, ' ')}. ${fileName(k + 1, slug).padEnd(46)} dataset page: ${titleOf(slug)}`);
   });
   L.push(
     '',
@@ -126,7 +130,7 @@ export function readmeText(world: World, anchors: readonly Anchor[], notes: read
   L.push(
     '', '6. How to remove the mock data', '-'.repeat(30),
     'On each dataset page use Start over, in the REVERSE of the upload order:',
-    `from ${last.title} (${UPLOAD_ORDER.length}) back to ${first.title} (1). Programmes cannot be cleared`,
+    `from ${last.title} (${order.length}) back to ${first.title} (1). Programmes cannot be cleared`,
     'while metric rows still depend on them, so go in that order.',
     'Then delete the generated folder.',
     '',

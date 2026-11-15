@@ -7,9 +7,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { getImportDataset, validateSheet, type ImportDataset, type ParsedSheet } from './vendor/db';
+import { validateSheet, type ParsedSheet } from './vendor/db';
 import { coursesFromCsv, coursesFromPdf, inventedCourses, shareWithSibling, type Course } from './courses';
-import { UPLOAD_ORDER, buildRows, type Row, type World } from './datasets';
+import { buildRows, type Row, type World } from './datasets';
 import { InputError, loadInputs, resolveAnchors } from './inputs';
 import { makePublications, makeStaff } from './people';
 import { makeRng } from './rng';
@@ -22,11 +22,13 @@ import {
   type LocalTcasFile,
   type TcasRow,
 } from './tcas';
+import { conformRows, planSheets } from './schema';
+import { readTemplateDir } from './templates';
 import { assertCellsClean, anchorLines, datasetBytes, fileName, readmeText } from './write';
 
 const USAGE =
   'Usage: pnpm workshop:mock <input.json> [--size small|medium] [--seed N] [--out DIR] ' +
-  '[--cache DIR] [--offline] [--tcas-file PATH:YEAR:ROUND ...]';
+  '[--cache DIR] [--offline] [--tcas-file PATH:YEAR:ROUND ...] [--templates DIR]';
 
 interface Args {
   input: string;
@@ -36,6 +38,7 @@ interface Args {
   cache: string | null;
   offline: boolean;
   tcasFiles: string[];
+  templates: string | null;
 }
 
 function parseCli(argv: readonly string[], base: string): Args {
@@ -51,6 +54,7 @@ function parseCli(argv: readonly string[], base: string): Args {
         cache: { type: 'string' },
         offline: { type: 'boolean', default: false },
         'tcas-file': { type: 'string', multiple: true, default: [] },
+        templates: { type: 'string' },
       },
     });
   } catch (err) {
@@ -72,6 +76,7 @@ function parseCli(argv: readonly string[], base: string): Args {
     cache: values.cache ? abs(String(values.cache)) : null,
     offline: Boolean(values.offline),
     tcasFiles: (values['tcas-file'] ?? []) as string[],
+    templates: values.templates ? abs(String(values.templates)) : null,
   };
 }
 
@@ -183,6 +188,9 @@ async function readTcas(args: Args, tcasFiles: LocalTcasFile[], cache: string): 
 async function run(argv: readonly string[], base: string): Promise<number> {
   const args = parseCli(argv, base);
   const inputs = loadInputs(args.input);
+  // read the templates first: a bad folder should stop the run before any download
+  const templateNotes: string[] = [];
+  const plan = planSheets(args.templates ? readTemplateDir(args.templates) : null, templateNotes);
   const cache = args.cache ?? path.join(args.out, '.cache');
   const tcasFiles = parseTcasFiles(args.tcasFiles, base);
   const rows = await readTcas(args, tcasFiles, cache);
@@ -204,27 +212,30 @@ async function run(argv: readonly string[], base: string): Promise<number> {
   const slice = chooseSlice(anchors, own, args.size, makeRng(args.seed));
   const { staff, links } = makeStaff(slice, makeRng(args.seed));
   const publications = makePublications(slice, staff, links, makeRng(args.seed));
-  const notes = [...slice.notes];
+  const notes = [...templateNotes, ...slice.notes];
   const courses = await buildCourses(slice, args.seed, notes);
   const world: World = { slice, staff, links, publications, courses, region: inputs.region, seed: args.seed, cache: new Map() };
 
   // Build and validate every sheet with the app's own validator before anything is written.
+  // Each sheet is fitted to its spec (the template's columns, or the built-in ones) first.
   const built = new Map<string, Row[]>();
   const references = new Map<string, Set<string>>();
   const failures: string[] = [];
-  for (const slug of UPLOAD_ORDER) {
-    const dataset: ImportDataset = getImportDataset(slug);
-    const sheetRows = buildRows(slug, world);
+  for (const slug of plan.order) {
+    const spec = plan.specs.get(slug);
+    if (!spec) throw new Error(`no sheet spec for '${slug}'`);
+    const { dataset } = spec;
+    const sheetRows = conformRows(spec, buildRows(slug, world));
     built.set(slug, sheetRows);
     try {
-      assertCellsClean(slug, sheetRows);
+      assertCellsClean(slug, sheetRows, spec);
     } catch (err) {
       failures.push((err as Error).message);
     }
     // register this sheet's reference values first, so a failure here cannot make a later
     // sheet throw for lack of references: every failure must reach the list below
-    for (const later of UPLOAD_ORDER) {
-      for (const col of getImportDataset(later).columns) {
+    for (const later of plan.order) {
+      for (const col of plan.specs.get(later)?.dataset.columns ?? []) {
         if (col.references?.dataset !== slug) continue;
         const header = dataset.columns.find((c) => c.key === col.references?.column)?.header;
         if (!header) continue;
@@ -237,7 +248,8 @@ async function run(argv: readonly string[], base: string): Promise<number> {
     try {
       const result = validateSheet(dataset, parsed, { references, heldRowCount: 0, allowShrink: false, maxRows: 5000 });
       if (!result.ok) {
-        failures.push(`${slug}: the app's importer would refuse this sheet:`);
+        const against = spec.template ? `its template (${path.basename(spec.template)})` : "the app's importer";
+        failures.push(`${slug}: ${against} would refuse this sheet:`);
         for (const e of result.errors.slice(0, 5)) failures.push(`  ${JSON.stringify(e)}`);
         if (result.errors.length > 5) failures.push(`  ... ${result.errors.length - 5} more errors`);
       }
@@ -246,7 +258,8 @@ async function run(argv: readonly string[], base: string): Promise<number> {
     }
   }
   if (failures.length > 0) {
-    throw new InputError(`Nothing was written. The generated data failed validation:\n${failures.join('\n')}`);
+    const why = templateNotes.length ? `\nThe templates differ from the built-in columns:\n  ${templateNotes.join('\n  ')}` : '';
+    throw new InputError(`Nothing was written. The generated data failed validation:\n${failures.join('\n')}${why}`);
   }
 
   // All good: now write.
@@ -269,14 +282,14 @@ async function run(argv: readonly string[], base: string): Promise<number> {
   console.log('TCAS matches:');
   for (const line of anchorLines(world, anchors)) console.log(`  ${line}`);
   for (const n of notes) console.log(`note: ${n}`);
-  UPLOAD_ORDER.forEach((slug, k) => {
+  plan.order.forEach((slug, k) => {
     const sheetRows = built.get(slug) as Row[];
     const file = path.join(args.out, fileName(k + 1, slug));
-    fs.writeFileSync(file, datasetBytes(slug, sheetRows));
+    fs.writeFileSync(file, datasetBytes(slug, sheetRows, plan.specs.get(slug)));
     console.log(`wrote ${file} (${sheetRows.length} rows)`);
   });
   const readme = path.join(args.out, 'README.txt');
-  fs.writeFileSync(readme, readmeText(world, anchors, notes, inputs.university), 'utf-8');
+  fs.writeFileSync(readme, readmeText(world, anchors, notes, inputs.university, plan), 'utf-8');
   console.log(`wrote ${readme}`);
   console.log(`Next: open ${readme} and follow it.`);
   return 0;

@@ -10,7 +10,7 @@ import type { Publication, RosterLink, Staff } from './people';
 import type { Programme, Slice } from './slice';
 
 /** The datasets the generator writes a sheet for. */
-const MOCK_DATASETS: ReadonlySet<string> = new Set([
+export const MOCK_DATASETS: ReadonlySet<string> = new Set([
   'faculties', 'departments', 'programmes', 'enrollment-metrics', 'financial-metrics',
   'graduate-outcomes', 'faculty-members', 'program-faculty', 'student-cohorts', 'alumni-cohorts',
   'admission-campaigns', 'research-outputs', 'programme-courses', 'career-skill-demand',

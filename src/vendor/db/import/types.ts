@@ -15,7 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** The cell shapes a template column can declare. */
-type ImportCellType = 'text' | 'integer' | 'decimal' | 'date' | 'boolean' | 'enum';
+export type ImportCellType = 'text' | 'integer' | 'decimal' | 'date' | 'boolean' | 'enum';
 
 /** A validated cell value, after coercion from whatever the sheet held. */
 export type ImportCellValue = string | number | boolean | Date | null;
@@ -90,7 +90,7 @@ type ImportMatch =
  *   does not mention are untouched. Used where the source is a programme's
  *   complete list of something, and a file may cover many programmes.
  */
-type ImportStrategy =
+export type ImportStrategy =
   | { kind: 'upsert'; match: ImportMatch }
   | { kind: 'term-scoped'; termColumns: readonly string[]; match: ImportMatch }
   | { kind: 'programme-scoped'; scopeColumns: readonly string[]; match: ImportMatch };

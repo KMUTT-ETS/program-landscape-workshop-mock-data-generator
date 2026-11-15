@@ -28,8 +28,10 @@ Flags:
   example `--tcas-file tcas67.xlsx:2567:3` (year is Buddhist era; rounds are `3`, or
   `3.1` / `3.2` for 2568). The file is copied into the cache, so later runs can use
   `--offline`.
+- `--templates DIR`: fit the files to the app's own import templates (see
+  [Using the app's templates](#using-the-apps-templates)).
 
-Relative paths you type (the input file, `--out`, `--cache`, `--tcas-file`) resolve
+Relative paths you type (the input file, `--out`, `--cache`, `--tcas-file`, `--templates`) resolve
 against the folder you ran pnpm from.
 
 On start the program prints which TCAS row each of your programmes was matched to, and
@@ -44,6 +46,37 @@ the importer and the `tcas` connector's matcher of the app version you will load
 into, run this from a Program Landscape checkout:
 
     pnpm workshop:check-mock <out> my-input.json
+
+## Using the app's templates
+
+Without `--templates` the files follow this repository's snapshot of the importer
+(`src/vendor/`). If the app you will upload into is newer, give it the app's templates:
+
+    # in a Program Landscape checkout, or use the bundle the facilitator sent
+    pnpm workshop:templates --out ~/import-templates
+
+    # here
+    pnpm workshop:mock my-input.json --templates ~/import-templates
+
+The folder holds `NN-<slug>-template.xlsx` files; a single template downloaded from a
+dataset's page (`<slug>-template-YYYY-MM-DD.xlsx`) works too. Each sheet is then written with
+the template's sheet name and columns, in the template's order, and the files are numbered
+by the template numbers. Columns are matched by header, ignoring case, spaces and
+punctuation, so the generator copes when the app:
+
+- adds an optional column: it is left blank;
+- adds a required column: every row gets the template's example value (the run stops if
+  the template has no example);
+- removes a column: it is not written;
+- reorders columns, renames the data sheet or renumbers the datasets;
+- changes a header only in case or punctuation.
+
+Every change is printed and listed under "Notes from this run" in `README.txt`. Read them:
+a filled-in example value is valid but meaningless. Columns that still match the built-in
+ones keep the importer's full rules (checks, references, duplicate keys). New or retyped
+columns are checked for what the template states: required, type and allowed values. A
+renamed header (beyond case or punctuation), a new kind of value, or a new dataset needs a
+change to the generator (`src/datasets.ts`).
 
 ## Input file
 
@@ -101,8 +134,9 @@ database-side (loaders, counts, start-over guards, Prisma types) is stripped, an
 Prisma enums a column check names become string-union types. `src/vendor/SOURCE.md`
 records the app commit the snapshot came from.
 
-When the app's import declarations change (a new dataset, a renamed column, a new
-rule), refresh the snapshot and re-run the tests:
+Small changes in the app are covered at run time by `--templates`. When the app's import
+declarations change for good (a new dataset, a renamed column, a new rule), refresh the
+snapshot and re-run the tests:
 
     pnpm sync-vendor ../program-landscape   # path to an app checkout
     pnpm check
