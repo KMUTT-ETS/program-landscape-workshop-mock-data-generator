@@ -1,0 +1,29 @@
+{
+  "name": "program-landscape-workshop-mock-data-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Writes mock Program Landscape import spreadsheets for a university, consistent with its public TCAS round-3 numbers.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24.22.1"
+  },
+  "packageManager": "pnpm@12.11.2",
+  "scripts": {
+    "workshop:mock": "tsx src/generate.ts",
+    "sync-vendor": "tsx scripts/sync-vendor.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.8.69",
+    "tsx": "4.21.0",
+    "xlsx": "0.18.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ts-morph": "^24.0.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
