@@ -56,10 +56,13 @@ export function datasetBytes(slug: string, rows: readonly Row[], spec: SheetSpec
 
 
 /** One line per anchor: the TCAS row it was matched to and the mock programme it became. */
-export function anchorLines(world: World, anchors: readonly Anchor[]): string[] {
+export function anchorLines(world: World, anchors: readonly Anchor[], tcasFree = false): string[] {
   return anchors.map((a, i) => {
     const prog = world.slice.programmes.find((p) => p.anchorIndex === i);
     const code = prog ? prog.code : '?';
+    if (tcasFree) {
+      return `${a.input.name} -> programme ${code} (${a.input.level}): faculty '${a.facultyTh}', names as typed (TCAS-free run)`;
+    }
     if (a.courseCodes.length > 0) {
       const more = a.courseCodes.length > 1 ? ` (+${a.courseCodes.length - 1} more codes)` : '';
       return `${a.input.name} -> programme ${code}: TCAS course code ${a.courseCodes[0]}${more}, faculty '${a.facultyTh}', programme '${a.programmeTh}'`;
@@ -74,6 +77,7 @@ export function readmeText(
   notes: readonly string[],
   university: string,
   plan: SheetPlan,
+  tcasFree = false,
 ): string {
   const { order, specs } = plan;
   const titleOf = (slug: string): string => (specs.get(slug) ?? builtInSpec(slug)).title;
@@ -84,6 +88,14 @@ export function readmeText(
     'These files are MOCK data. They are not your university\'s real figures.',
     'Do not show them to anyone as real results.',
     '',
+    ...(tcasFree
+      ? [
+          'TCAS-FREE RUN (--no-tcas): no TCAS data was read. Faculty and programme names are',
+          'as you typed them, and every admission figure is invented. Do NOT run the tcas',
+          'connector: it would link nothing, or link real figures that contradict these.',
+          '',
+        ]
+      : []),
     '1. Organisation profile',
     '-'.repeat(24),
     'In the app open /admin/organization, the "Identity" tab. Type the Thai name exactly and pick the region:',
@@ -107,7 +119,9 @@ export function readmeText(
     '3. Run these connectors',
     '-'.repeat(23),
     'Do this at /admin/data-sources, AFTER all the uploads above are done.',
-    '  tcas              needed. Links the public TCAS admission rows to the mock programmes.',
+    tcasFree
+      ? '  tcas              do NOT run. This is a TCAS-free run (see the top of this file).'
+      : '  tcas              needed. Links the public TCAS admission rows to the mock programmes.',
     '  un-wpp            needed. Loads the public UN population projections.',
         '  openalex-works    will NOT match. The mock staff are tokens (Lecturer 001 and so on),',
     '                    not real people, so there is nothing for it to find. Skip it.',
@@ -119,12 +133,21 @@ export function readmeText(
     '"Demand match filled" stay missing, and pipeline phase 3 skips the demand match.',
     'It takes about 13 seconds for the mock\'s names. Then attach the PDF and run the pipeline.',
     '',
-    '4. Which TCAS row anchors which programme',
-    '-'.repeat(41),
-    'Check that each match below is the programme you meant. If one is wrong, add',
-    '"tcas_code": "..." to that entry of "programmes" in your input file and run again.', '',
+    ...(tcasFree
+      ? [
+          '4. Which mock programme each input became',
+          '-'.repeat(40),
+          'Without TCAS, the Deep-Dive\'s TCAS section and min-score percentile driver stay',
+          'empty. Recruitment and the admission drivers come from the admission-campaigns file.', '',
+        ]
+      : [
+          '4. Which TCAS row anchors which programme',
+          '-'.repeat(41),
+          'Check that each match below is the programme you meant. If one is wrong, add',
+          '"tcas_code": "..." to that entry of "programmes" in your input file and run again.', '',
+        ]),
   );
-  L.push(...anchorLines(world, anchors).map((x) => `  ${x}`));
+  L.push(...anchorLines(world, anchors, tcasFree).map((x) => `  ${x}`));
   L.push('', '5. Notes from this run', '-'.repeat(22));
   L.push(...(notes.length ? notes.map((n) => `  - ${n}`) : ['  (none)']));
   L.push(

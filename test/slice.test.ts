@@ -214,3 +214,36 @@ describe('rng', () => {
     expect(makeRng(1).shuffle([1, 2, 3, 4, 5]).sort()).toEqual([1, 2, 3, 4, 5]);
   });
 });
+
+describe('chooseSlice, TCAS-free (--no-tcas)', () => {
+  const free = (p: ProgrammeInput[]): Slice =>
+    chooseSlice(resolveAnchors({ university: 'U', region: 'x', programmes: p }, [], true), [], 'small', makeRng(1), 2568);
+
+  it('keeps names as typed, invents an international twin for a bachelor anchor, and dates by the given year', () => {
+    const s = free([
+      prog('วิศวกรรมวัสดุ', { faculty: 'คณะ ที่ไม่มีใน TCAS', tcasCode: 'ignored' }),
+      prog('เคมี', { level: 'MASTER', faculty: 'คณะวิทยาศาสตร์' }),
+    ]);
+    expect(s.programmes.map((p) => p.nameTh).sort()).toEqual(
+      ['วิศวกรรมวัสดุ', 'วิศวกรรมวัสดุ (หลักสูตรนานาชาติ)', 'เคมี', 'เคมี (แผน ข)'].sort(),
+    );
+    expect(s.faculties.map((f) => f.nameTh).sort()).toEqual(['คณะ ที่ไม่มีใน TCAS', 'คณะวิทยาศาสตร์'].sort());
+    const anchor = s.programmes.find((p) => p.nameTh === 'วิศวกรรมวัสดุ')!;
+    const twin = s.programmes.find((p) => p.nameTh === 'วิศวกรรมวัสดุ (หลักสูตรนานาชาติ)')!;
+    expect(twin.siblingOf).toBe(anchor.code);
+    expect(twin.departmentCode).toBe(anchor.departmentCode);
+    expect(twin.nameEn).toBe(`${anchor.nameEn} (International Programme)`);
+    expect(s.programmes.every((p) => p.tcas.size === 0)).toBe(true);
+    expect(s.latestYearCE).toBe(2568 - 543);
+  });
+
+  it('gives an international anchor no twin', () => {
+    const s = free([prog('วิศวกรรมวัสดุ (หลักสูตรนานาชาติ)')]);
+    expect(s.programmes).toHaveLength(1);
+  });
+
+  it('needs the latest year when there are no TCAS rows', () => {
+    const a = resolveAnchors({ university: 'U', region: 'x', programmes: [prog('x')] }, [], true);
+    expect(() => chooseSlice(a, [], 'small', makeRng(1))).toThrow(/latestYearBE/);
+  });
+});

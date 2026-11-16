@@ -2,6 +2,10 @@
 //
 //   pnpm workshop:mock <input.json> [--size small|medium] [--seed N] [--out DIR]
 //                      [--cache DIR] [--offline] [--tcas-file PATH:YEAR:ROUND ...]
+//                      [--templates DIR] [--no-tcas]
+//
+// --no-tcas is for a university that does not admit through TCAS: nothing is downloaded,
+// faculty and programme names are taken as typed, and every admission figure is invented.
 //
 // Exit codes: 0 success, 2 input error (a message, no stack trace).
 import fs from 'node:fs';
@@ -28,7 +32,7 @@ import { assertCellsClean, anchorLines, datasetBytes, fileName, readmeText } fro
 
 const USAGE =
   'Usage: pnpm workshop:mock <input.json> [--size small|medium] [--seed N] [--out DIR] ' +
-  '[--cache DIR] [--offline] [--tcas-file PATH:YEAR:ROUND ...] [--templates DIR]';
+  '[--cache DIR] [--offline] [--tcas-file PATH:YEAR:ROUND ...] [--templates DIR] [--no-tcas]';
 
 interface Args {
   input: string;
@@ -39,6 +43,7 @@ interface Args {
   offline: boolean;
   tcasFiles: string[];
   templates: string | null;
+  noTcas: boolean;
 }
 
 function parseCli(argv: readonly string[], base: string): Args {
@@ -55,6 +60,7 @@ function parseCli(argv: readonly string[], base: string): Args {
         offline: { type: 'boolean', default: false },
         'tcas-file': { type: 'string', multiple: true, default: [] },
         templates: { type: 'string' },
+        'no-tcas': { type: 'boolean', default: false },
       },
     });
   } catch (err) {
@@ -65,6 +71,10 @@ function parseCli(argv: readonly string[], base: string): Args {
   const size = String(values.size);
   if (!Object.prototype.hasOwnProperty.call(SIZES, size)) {
     throw new InputError(`--size must be one of ${Object.keys(SIZES).sort().join(', ')} (got ${size})`);
+  }
+  const noTcas = Boolean(values['no-tcas']);
+  if (noTcas && ((values['tcas-file'] ?? []) as string[]).length > 0) {
+    throw new InputError('--no-tcas and --tcas-file cannot be used together: --no-tcas reads no TCAS data.');
   }
   if (!/^-?\d+$/.test(String(values.seed))) throw new InputError(`--seed must be an integer (got ${String(values.seed)})`);
   const abs = (p: string): string => path.resolve(base, p);
@@ -77,6 +87,7 @@ function parseCli(argv: readonly string[], base: string): Args {
     offline: Boolean(values.offline),
     tcasFiles: (values['tcas-file'] ?? []) as string[],
     templates: values.templates ? abs(String(values.templates)) : null,
+    noTcas,
   };
 }
 
@@ -193,26 +204,33 @@ async function run(argv: readonly string[], base: string): Promise<number> {
   const plan = planSheets(args.templates ? readTemplateDir(args.templates) : null, templateNotes);
   const cache = args.cache ?? path.join(args.out, '.cache');
   const tcasFiles = parseTcasFiles(args.tcasFiles, base);
-  const rows = await readTcas(args, tcasFiles, cache);
-  if (rows.length === 0) {
+  const rows = args.noTcas ? [] : await readTcas(args, tcasFiles, cache);
+  if (rows.length === 0 && !args.noTcas) {
     const hint = args.offline
       ? 'Nothing is cached and --offline forbids downloading. Run once without --offline, or pass --tcas-file PATH:YEAR:ROUND.'
       : 'No TCAS rows could be read. Check the network, or pass --tcas-file PATH:YEAR:ROUND.';
     throw new InputError(`No TCAS data. ${hint}`);
   }
   const own = ownRows(rows, inputs.university);
-  if (own.length === 0) {
+  if (own.length === 0 && !args.noTcas) {
     const near = closestInstitutions(rows, inputs.university);
     throw new InputError(
       `University '${inputs.university}' is not in the TCAS files. ` +
-        `Use the Thai name exactly as TCAS spells it. Closest names:\n  ${near.join('\n  ')}`,
+        `Use the Thai name exactly as TCAS spells it. Closest names:\n  ${near.join('\n  ')}\n` +
+        'If your university does not admit through TCAS, run again with --no-tcas.',
     );
   }
-  const anchors = resolveAnchors(inputs, own);
-  const slice = chooseSlice(anchors, own, args.size, makeRng(args.seed));
+  const anchors = resolveAnchors(inputs, own, args.noTcas);
+  // a TCAS-free run dates its admission years by the newest TCAS file this version knows
+  const latestYearBE = args.noTcas ? Math.max(...TCAS_FILES.map((f) => f.entryYearBE)) : undefined;
+  const slice = chooseSlice(anchors, own, args.size, makeRng(args.seed), latestYearBE);
   const { staff, links } = makeStaff(slice, makeRng(args.seed));
   const publications = makePublications(slice, staff, links, makeRng(args.seed));
   const notes = [...templateNotes, ...slice.notes];
+  if (args.noTcas) {
+    const ignored = inputs.programmes.filter((p) => p.tcasCode).map((p) => p.name);
+    if (ignored.length) notes.push(`--no-tcas: tcas_code ignored for ${ignored.join(', ')}`);
+  }
   const courses = await buildCourses(slice, args.seed, notes);
   const world: World = { slice, staff, links, publications, courses, region: inputs.region, seed: args.seed, cache: new Map() };
 
@@ -275,12 +293,18 @@ async function run(argv: readonly string[], base: string): Promise<number> {
     // record which files this run used, so a later --offline run reads the same set
     const used = tcasFiles.map((f) => ({ file: cacheName(f.entryYearBE, f.round), entryYearBE: f.entryYearBE, round: f.round }));
     fs.writeFileSync(manifest, `${JSON.stringify(used, null, 2)}\n`, 'utf-8');
-  } else if (!args.offline) {
+  } else if (!args.offline && !args.noTcas) {
     fs.rmSync(manifest, { force: true }); // an online run downloads the full set again
   }
-  console.log(`TCAS years loaded: ${[...new Set(rows.map((r) => `${r.entryYearBE}/${r.round}`))].sort().join(', ')}`);
-  console.log('TCAS matches:');
-  for (const line of anchorLines(world, anchors)) console.log(`  ${line}`);
+  if (args.noTcas) {
+    console.log('TCAS-free run (--no-tcas): no TCAS data was read; every admission figure is invented.');
+    console.log('Do NOT run the tcas connector for this data (see README.txt).');
+    console.log('Programmes:');
+  } else {
+    console.log(`TCAS years loaded: ${[...new Set(rows.map((r) => `${r.entryYearBE}/${r.round}`))].sort().join(', ')}`);
+    console.log('TCAS matches:');
+  }
+  for (const line of anchorLines(world, anchors, args.noTcas)) console.log(`  ${line}`);
   for (const n of notes) console.log(`note: ${n}`);
   plan.order.forEach((slug, k) => {
     const sheetRows = built.get(slug) as Row[];
@@ -289,7 +313,7 @@ async function run(argv: readonly string[], base: string): Promise<number> {
     console.log(`wrote ${file} (${sheetRows.length} rows)`);
   });
   const readme = path.join(args.out, 'README.txt');
-  fs.writeFileSync(readme, readmeText(world, anchors, notes, inputs.university, plan), 'utf-8');
+  fs.writeFileSync(readme, readmeText(world, anchors, notes, inputs.university, plan, args.noTcas), 'utf-8');
   console.log(`wrote ${readme}`);
   console.log(`Next: open ${readme} and follow it.`);
   return 0;

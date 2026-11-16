@@ -206,7 +206,11 @@ function candidateLines(ranked: Array<[number, Pair]>): string {
     .join('\n');
 }
 
-export function resolveAnchors(inputs: Inputs, own: readonly TcasRow[]): Anchor[] {
+/**
+ * Each input programme as an Anchor. `tcasFree` (the --no-tcas run) takes every name as typed:
+ * no TCAS row is read, matched or required.
+ */
+export function resolveAnchors(inputs: Inputs, own: readonly TcasRow[], tcasFree = false): Anchor[] {
   const pairs = latestPairs(own);
   const out: Anchor[] = [];
   for (const inp of inputs.programmes) {
@@ -214,6 +218,10 @@ export function resolveAnchors(inputs: Inputs, own: readonly TcasRow[]): Anchor[
       throw new InputError(`${inp.name}: level must be one of ${LEVELS.join(', ')} (got ${inp.level})`);
     }
     if (!inp.faculty) throw new InputError(`${inp.name}: \`faculty\` is required`);
+    if (tcasFree) {
+      out.push({ input: inp, facultyTh: inp.faculty, programmeTh: inp.name, courseCodes: [], rows: [] });
+      continue;
+    }
     if (inp.level !== 'BACHELOR') {
       const known = [...new Set(own.map((r) => r.faculty))].sort();
       // a graduate-only faculty has no TCAS rows, so an unmatched name is kept as typed

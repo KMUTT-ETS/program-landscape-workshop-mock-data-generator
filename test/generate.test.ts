@@ -212,3 +212,55 @@ describe('determinism across processes', () => {
     for (const k of Object.keys(outs[0]!)) expect(outs[0]![k], k).toBe(outs[1]![k]);
   }, 180_000);
 });
+
+describe('generate --no-tcas', () => {
+  const freeInput = (): string => {
+    const file = path.join(tmp, 'free.json');
+    fs.copyFileSync(path.join(FIX, 'curriculum-sample.pdf'), path.join(tmp, 'curriculum-sample.pdf'));
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        university: 'สถาบันสมมุติที่ไม่ใช้ TCAS',
+        region: 'Northeast',
+        programmes: [
+          { name: 'วิศวกรรมวัสดุ', faculty: 'คณะวิศวกรรมศาสตร์', pdf: 'curriculum-sample.pdf' },
+          { name: 'เคมี', faculty: 'คณะวิทยาศาสตร์', level: 'MASTER' },
+        ],
+      }),
+    );
+    return file;
+  };
+
+  it('writes every file without reading or downloading TCAS, and says so in README.txt', async () => {
+    const out = path.join(tmp, 'out');
+    // --offline on top: any attempt to read TCAS would fail the run
+    const r = await run([freeInput(), '--no-tcas', '--offline', '--out', out]);
+    expect(r.code, r.text).toBe(0);
+    expect(fs.readdirSync(out).filter((f) => f.endsWith('.xlsx'))).toHaveLength(UPLOAD_ORDER.length);
+    expect(r.text).toContain('TCAS-free run');
+    expect(r.text).not.toContain('TCAS years loaded');
+    const readme = fs.readFileSync(path.join(out, 'README.txt'), 'utf-8');
+    expect(readme).toContain('TCAS-FREE RUN (--no-tcas)');
+    expect(readme).toMatch(/tcas +do NOT run/);
+    expect(readme).toContain('สถาบันสมมุติที่ไม่ใช้ TCAS');
+    const wb = XLSX.read(fs.readFileSync(path.join(out, '03-programmes.xlsx')), { type: 'buffer' });
+    const names = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets[wb.SheetNames[0]!]!).map((x) => x['Name (Thai)']);
+    expect(names).toEqual(expect.arrayContaining(['วิศวกรรมวัสดุ', 'วิศวกรรมวัสดุ (หลักสูตรนานาชาติ)', 'เคมี', 'เคมี (แผน ข)']));
+    const first = files(out);
+    expect((await run([freeInput(), '--no-tcas', '--out', out])).code).toBe(0);
+    expect(files(out)).toEqual(first);
+  }, 120_000);
+
+  it('refuses --no-tcas with --tcas-file', async () => {
+    const r = await run([freeInput(), '--no-tcas', '--tcas-file', TCAS_ARG, '--out', path.join(tmp, 'out')]);
+    expect(r.code).toBe(2);
+    expect(r.text).toContain('--no-tcas and --tcas-file cannot be used together');
+  });
+
+  it('a university missing from TCAS is pointed to --no-tcas', async () => {
+    const r = await run([freeInput(), '--tcas-file', TCAS_ARG, '--out', path.join(tmp, 'out')]);
+    expect(r.code).toBe(2);
+    expect(r.text).toContain('is not in the TCAS files');
+    expect(r.text).toContain('run again with --no-tcas');
+  });
+});

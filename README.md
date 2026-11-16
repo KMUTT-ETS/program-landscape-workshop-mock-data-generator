@@ -3,7 +3,7 @@
 Writes 20 mock import spreadsheets (and a `README.txt` of next steps) for your
 university, so you can try the Program Landscape import without real data.
 The figures are invented, but they agree with the public TCAS round-3 numbers
-of your own programmes. It needs only Node (24.22.1 or later) and pnpm; it does not
+of your own programmes (or, with `--no-tcas`, are all invented). It needs only Node (24.22.1 or later) and pnpm; it does not
 need a Program Landscape checkout or a database.
 
 This repository was extracted from the Program Landscape monorepo
@@ -30,6 +30,8 @@ Flags:
   `--offline`.
 - `--templates DIR`: fit the files to the app's own import templates (see
   [Using the app's templates](#using-the-apps-templates)).
+- `--no-tcas`: for a university that does not admit through TCAS (see
+  [Without TCAS](#without-tcas)). Cannot be combined with `--tcas-file`.
 
 Relative paths you type (the input file, `--out`, `--cache`, `--tcas-file`, `--templates`) resolve
 against the folder you ran pnpm from.
@@ -46,6 +48,29 @@ the importer and the `tcas` connector's matcher of the app version you will load
 into, run this from a Program Landscape checkout:
 
     pnpm workshop:check-mock <out> my-input.json
+
+## Without TCAS
+
+By default the generator reads the public TCAS round-3 files, because the app's `tcas`
+connector does too: it copies your real faculty and programme names (so the connector can
+link them) and your real round-3 figures (so the uploaded admission sheet agrees with the
+connector). A university that is not in TCAS cannot run that way.
+
+`--no-tcas` reads no TCAS data and downloads nothing:
+
+- faculty and programme names are taken exactly as typed in the input file; `tcas_code` is ignored;
+- every admission figure is invented, from seeded random ranges;
+- each bachelor programme gets an invented international twin (`... (หลักสูตรนานาชาติ)`) that
+  shares courses with it, as postgraduate programmes get a `(แผน ข)` twin. There is no other
+  filler, so the slice holds only your programmes and their twins.
+
+Effect in the app: the files upload and the Deep-Dive fills, except the TCAS section and the
+min-score percentile driver, which only the `tcas` connector feeds. Recruitment and the other
+admission drivers come from the uploaded admission-campaigns file. **Do not run the `tcas`
+connector on this data**: it would link nothing, or link real figures that contradict the
+invented ones. `README.txt` in the output says so too.
+
+    pnpm workshop:mock my-input.json --no-tcas
 
 ## Using the app's templates
 
@@ -106,7 +131,7 @@ field is explained here.
 ## If something fails
 
 - `University '...' is not in the TCAS files`: copy the Thai name from one of the
-  closest names it lists.
+  closest names it lists. If your university does not admit through TCAS, add `--no-tcas`.
 - `Cannot match programme`: add `"tcas_code": "<course code>"` to that entry, using a
   code from the candidate list, or check that the entry's `faculty` is right.
 - `faculty '...' has no programmes in the latest TCAS year`: copy the faculty's Thai name

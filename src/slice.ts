@@ -113,6 +113,8 @@ interface Draft {
   anchor?: Anchor;
   /** [faculty, name] of the anchor draft this one is a sibling of. */
   siblingOf?: [string, string];
+  /** An invented international twin of a bachelor anchor (TCAS-free runs only). */
+  intlTwin?: boolean;
 }
 
 const translatable = (faculty: string, programme: string): boolean =>
@@ -121,7 +123,20 @@ const translatable = (faculty: string, programme: string): boolean =>
 const keyOf = (faculty: string, name: string): string => `${faculty}\u0001${name}`;
 const pad = (n: number, w: number): string => String(n).padStart(w, '0');
 
-export function chooseSlice(anchors: readonly Anchor[], own: readonly TcasRow[], size: SliceSize, rng: Rng): Slice {
+const INTL_TH = 'หลักสูตรนานาชาติ';
+
+/**
+ * `latestYearBE` is the newest admission year of the slice; it defaults to the newest year in
+ * `own`. A TCAS-free run (`own` empty) must pass it.
+ */
+export function chooseSlice(
+  anchors: readonly Anchor[],
+  own: readonly TcasRow[],
+  size: SliceSize,
+  rng: Rng,
+  latestYearBE?: number,
+): Slice {
+  const tcasFree = own.length === 0;
   const [nFac, nProg] = SIZES[size];
   const avail = pairsOf(own);
   const drafts: Draft[] = [];
@@ -138,7 +153,14 @@ export function chooseSlice(anchors: readonly Anchor[], own: readonly TcasRow[],
     if (a.input.level === 'BACHELOR') {
       let pool: Array<[string, string]> = free(a.facultyTh).map((p) => [a.facultyTh, p]);
       if (pool.length === 0) pool = sortedFaculties().flatMap((f) => free(f).map((p): [string, string] => [f, p]));
-      if (pool.length === 0) continue;
+      if (pool.length === 0) {
+        // no TCAS programmes to borrow: invent the international twin, as a sibling that shares courses
+        const name = `${a.programmeTh} (${INTL_TH})`;
+        if (!tcasFree || a.programmeTh.includes('นานาชาติ') || used.has(keyOf(a.facultyTh, name))) continue;
+        used.add(keyOf(a.facultyTh, name));
+        drafts.push({ faculty: a.facultyTh, nameTh: name, level: 'BACHELOR', siblingOf: [a.facultyTh, a.programmeTh], intlTwin: true });
+        continue;
+      }
       const good = pool.filter(([f, p]) => translatable(f, p));
       if (good.length) pool = good;
       const [f, p] = rng.choice(pool);
@@ -209,7 +231,8 @@ export function chooseSlice(anchors: readonly Anchor[], own: readonly TcasRow[],
   );
   const progCode = new Map(ordered.map((d, i) => [keyOf(d.faculty, d.nameTh), `MOCK-P${pad(i + 1, 3)}`]));
 
-  const latestBE = Math.max(...own.map((r) => r.entryYearBE));
+  const latestBE = latestYearBE ?? Math.max(...own.map((r) => r.entryYearBE));
+  if (!Number.isFinite(latestBE)) throw new Error('chooseSlice: no TCAS rows, so latestYearBE must be given');
   const latestCE = latestBE - 543;
   const notes: string[] = [];
   const facEn = new Map<string, string>();
@@ -264,6 +287,9 @@ export function chooseSlice(anchors: readonly Anchor[], own: readonly TcasRow[],
     if (d.siblingOf && d.level !== 'BACHELOR') {
       const base = enCache.get(keyOf(d.siblingOf[0], d.siblingOf[1]));
       if (base !== undefined) nameEn = `${base} (Plan B)`;
+    } else if (d.siblingOf && d.intlTwin) {
+      const base = enCache.get(keyOf(d.siblingOf[0], d.siblingOf[1]));
+      if (base !== undefined) nameEn = `${base} (International Programme)`;
     }
     enCache.set(keyOf(d.faculty, d.nameTh), nameEn);
     programmes.push({
